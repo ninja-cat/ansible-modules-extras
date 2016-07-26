@@ -25,13 +25,13 @@ author: "Alexander Bulimov (@abulimov)"
 module: lvg
 short_description: Configure LVM volume groups
 description:
-  - This module creates, removes or resizes volume groups.
+  - This module lists, creates, removes or resizes volume groups.
 version_added: "1.1"
 options:
   vg:
     description:
-    - The name of the volume group.
-    required: true
+    - The name of the volume group. Required when modifying volume group.
+    required: false
   pvs:
     description:
     - List of comma-separated devices to use as physical devices in this volume group. Required when creating or resizing volume group.
@@ -60,6 +60,20 @@ options:
     description:
     - If yes, allows to remove volume group with logical volumes.
     required: false
+  cmd:
+    version_added: "2.2"
+    choices: [ "modify", "list" ]
+    default: "modify"
+    description:
+    - If list, lists all existing volume group. Returns vgs dictionary in which the keys are volume group names.
+    required: false
+  units:
+    version_added: "2.2"
+    choises: [ "h", "H", "b", "B", "s", "S", "k" , "K", "m", "M", "g", "G", "t", "T", "p", "P", "e", "E" ]
+    default: "m"
+    description:
+    - If cmd=list, list sizes of volumes groups in specified units.
+    required: false
 notes:
   - module does not modify PE size for already present volume group
 '''
@@ -77,6 +91,12 @@ EXAMPLES = '''
 
 # Remove a volume group with name vg.services.
 - lvg: vg=vg.services state=absent
+
+# List all volume groups with sizes in megabytes
+- lvg: cmd=list
+
+# List all volume groups with sizes in gigabytes
+- lvg: cmd=list units=g
 '''
 
 def parse_vgs(data):
@@ -115,15 +135,37 @@ def parse_pvs(module, data):
 def main():
     module = AnsibleModule(
         argument_spec = dict(
-            vg=dict(required=True),
+            vg=dict(type='str'),
             pvs=dict(type='list'),
             pesize=dict(type='int', default=4),
             vg_options=dict(default=''),
             state=dict(choices=["absent", "present"], default='present'),
             force=dict(type='bool', default='no'),
+            cmd=dict(choices=["list", "modify"], default='modify'),
+            units=dict(choises=["h", "H", "b", "B", "s", "S", "k" , "K", "m", "M", "g", "G", "t", "T", "p", "P", "e", "E"], default='m'),
         ),
         supports_check_mode=True,
+        required_if=[
+            ('cmd', 'modify', ['vg']),
+        ],
     )
+
+    cmd = module.params['cmd']
+    units = module.params['units']
+    if cmd == 'list':
+            lvm_util_options = '--noheadings --nosuffix -o vg_name,pv_count,lv_count,vg_size,vg_free --units %s' % units
+            vgs_path = module.get_bin_path('vgs', True)
+            vgs={}
+            rc, vg_lines, err = module.run_command( '%s %s' % (vgs_path, lvm_util_options))
+            if rc != 0:
+                module.fail_json(msg="Failed executing vgs command.",rc=rc, err=err)
+            for vg_line in vg_lines.splitlines():
+                items = vg_line.split()
+                vgs[items[0]] = {'size':items[3],
+                                 'free':items[4],
+                                 'num_lvs': items[2],
+                                 'num_pvs': items[1]}
+            module.exit_json(changed=False, vgs=vgs)
 
     vg = module.params['vg']
     state = module.params['state']

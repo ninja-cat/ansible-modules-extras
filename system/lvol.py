@@ -26,17 +26,17 @@ author:
 module: lvol
 short_description: Configure LVM logical volumes
 description:
-  - This module creates, removes or resizes logical volumes.
+  - This module lists, creates, removes or resizes logical volumes.
 version_added: "1.1"
 options:
   vg:
     description:
-    - The volume group this logical volume is part of.
-    required: true
+    - The volume group this logical volume is part of. Required when configuring logical volume.
+    required: false
   lv:
     description:
-    - The name of the logical volume.
-    required: true
+    - The name of the logical volume. Required when configuring logical volume.
+    required: false
   size:
     description:
     - The size of the logical volume, according to lvcreate(8) --size, by
@@ -79,6 +79,20 @@ options:
     - shrink if current size is higher than size requested
     required: false
     default: yes
+  cmd:
+    version_added: "2.2"
+    choices: [ "modify", "list" ]
+    default: "modify"
+    description:
+    - If list, lists all existing vogical volumes. Returns lvs dictionary in which the keys are logical volume names.
+    required: false
+  units:
+    version_added: "2.2"
+    choises: [ "h", "H", "b", "B", "s", "S", "k" , "K", "m", "M", "g", "G", "t", "T", "p", "P", "e", "E" ]
+    default: "m"
+    description:
+    - If cmd=list, list sizes of logical volumes in specified units.
+    required: false
 notes:
   - Filesystems on top of the volume are not resized.
 '''
@@ -125,6 +139,12 @@ EXAMPLES = '''
 
 # Create a snapshot volume of the test logical volume.
 - lvol: vg=firefly lv=test snapshot=snap1 size=100m
+
+# List all logical volumes with sizes in megabytes
+- lvol: cmd=list
+
+# List all logical volumes with sizes in gigabytes
+- lvol: cmd=list units=g
 '''
 
 import re
@@ -171,18 +191,38 @@ def get_lvm_version(module):
 def main():
     module = AnsibleModule(
         argument_spec=dict(
-            vg=dict(required=True),
-            lv=dict(required=True),
+            vg=dict(type='str'),
+            lv=dict(type='str'),
             size=dict(type='str'),
             opts=dict(type='str'),
             state=dict(choices=["absent", "present"], default='present'),
             force=dict(type='bool', default='no'),
             shrink=dict(type='bool', default='yes'),
             snapshot=dict(type='str', default=None),
-            pvs=dict(type='str')
+            pvs=dict(type='str'),
+            cmd=dict(choices=["list", "modify"], default='modify'),
+            units=dict(choises=["h", "H", "b", "B", "s", "S", "k" , "K", "m", "M", "g", "G", "t", "T", "p", "P", "e", "E"], default='m'),
         ),
         supports_check_mode=True,
+        required_if=[
+            ('cmd', 'modify', ['vg', 'lv']),
+        ],
     )
+
+    cmd = module.params['cmd']
+    units = module.params['units']
+    if cmd == 'list':
+            lvm_util_options = '--noheadings --nosuffix -o lv_name,vg_name,lv_size --units %s' % units
+            lvs_path = module.get_bin_path('lvs', True)
+            lvs = {}
+            rc, lv_lines, err = module.run_command( '%s %s' % (lvs_path, lvm_util_options))
+            if rc != 0:
+                module.fail_json(msg="Failed executing lvs command.",rc=rc, err=err)
+            for lv_line in lv_lines.splitlines():
+                items = lv_line.split()
+                lv_name = items[0].replace('[','').replace(']','')
+                lvs[lv_name] = {'size': items[2], 'vg': items[1]}
+            module.exit_json(changed=False, lvs=lvs)
 
     # Determine if the "--yes" option should be used
     version_found = get_lvm_version(module)
